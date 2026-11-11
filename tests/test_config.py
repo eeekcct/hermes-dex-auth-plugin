@@ -147,6 +147,19 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self._load({**SETTINGS, "tls": {"ca_bundle": "/ca.crt", "insecure_skip_verify": True}})
 
+    def test_email_only_configuration_loads_access_policy(self) -> None:
+        settings = self._load(
+            {**SETTINGS, "access": {"emails": [{"connector_id": "github", "email": "member@example.test"}]}}
+        )
+        claims: dict[str, object] = {
+            "federated_claims": {"connector_id": "github", "user_id": "another-user"},
+            "email": "member@example.test",
+            "email_verified": True,
+        }
+        self.assertTrue(settings["access_policy"].allows(claims))
+        self.assertFalse(settings["access_policy"].allows({**claims, "email_verified": False}))
+        self.assertFalse(settings["access_policy"].allows({**claims, "email": "other@example.test"}))
+
     def test_example_values_load_into_the_provider(self) -> None:
         import hermes_yaml
 
@@ -155,6 +168,14 @@ class ConfigTests(unittest.TestCase):
         assert settings is not None
         provider = DexAuthProvider(**settings)
         self.assertEqual(provider.name, "dex")
+        claims: dict[str, object] = {
+            "federated_claims": {"connector_id": "github", "user_id": "another-user"},
+            "email": "user@example.com",
+            "email_verified": True,
+        }
+        self.assertTrue(settings["access_policy"].allows(claims))
+        self.assertFalse(settings["access_policy"].allows({**claims, "email_verified": False}))
+        self.assertFalse(settings["access_policy"].allows({**claims, "email": "other@example.com"}))
 
 
 if __name__ == "__main__":

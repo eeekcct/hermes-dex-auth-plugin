@@ -39,17 +39,19 @@ def _rules(value: object, *, field: str, identity_key: str) -> frozenset[tuple[s
 @dataclass(frozen=True)
 class AccessPolicy:
     users: frozenset[tuple[str, str]] = frozenset()
+    emails: frozenset[tuple[str, str]] = frozenset()
     groups: frozenset[tuple[str, str]] = frozenset()
 
     def __post_init__(self) -> None:
-        if not self.users and not self.groups:
-            raise ValueError("Dex access requires at least one user or group rule")
+        if not self.users and not self.emails and not self.groups:
+            raise ValueError("Dex access requires at least one user, email, or group rule")
 
     @classmethod
     def from_config(cls, value: object) -> Self:
-        access = mapping(value, field="access", keys=("users", "groups"))
+        access = mapping(value, field="access", keys=("users", "emails", "groups"))
         return cls(
             users=_rules(access.get("users", []), field="access.users", identity_key="user_id"),
+            emails=_rules(access.get("emails", []), field="access.emails", identity_key="email"),
             groups=_rules(access.get("groups", []), field="access.groups", identity_key="name"),
         )
 
@@ -59,10 +61,20 @@ class AccessPolicy:
             return False
         federated_claims = cast(dict[str, object], identity)
         connector_id = federated_claims.get("connector_id")
-        user_id = federated_claims.get("user_id")
-        if not isinstance(connector_id, str) or not isinstance(user_id, str) or not user_id:
+        if not isinstance(connector_id, str) or not connector_id:
             return False
+        user_id = federated_claims.get("user_id")
+        if not isinstance(user_id, str) or not user_id:
+            return False
+        if claims.get("email_verified") is not True:
+            return False
+        email = claims.get("email")
+        if not isinstance(email, str) or not email:
+            return False
+
         if (connector_id, user_id) in self.users:
+            return True
+        if (connector_id, email) in self.emails:
             return True
         groups = claims.get("groups", [])
         if not isinstance(groups, list):

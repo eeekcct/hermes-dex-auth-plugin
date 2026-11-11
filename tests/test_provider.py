@@ -71,6 +71,8 @@ class GitHubIdentityTests(unittest.TestCase):
             "iss": ISSUER,
             "aud": CLIENT,
             "sub": "dex-opaque-subject",
+            "email": "user@example.test",
+            "email_verified": True,
             "iat": now,
             "exp": now + 300,
             "federated_claims": identity or {"connector_id": "github", "user_id": OWNER},
@@ -132,7 +134,7 @@ class GitHubIdentityTests(unittest.TestCase):
         self.provider._access_policy = policy
         allowed = self._token(groups=["my-org:platform"])
         self.assertIsNotNone(self.provider.verify_session(access_token=allowed))
-        response = httpx.Response(200, json={"id_token": allowed})
+        response = httpx.Response(200, json={"id_token": allowed, "token_type": "Bearer"})
         with patch.object(self.provider._transport, "request", return_value=response):
             self.assertEqual(
                 self.provider.complete_login(
@@ -146,7 +148,88 @@ class GitHubIdentityTests(unittest.TestCase):
             self.assertEqual(self.provider.refresh_session(refresh_token="refresh").provider, "dex")
         denied = self._token(groups=["my-org:other"])
         self.assertIsNone(self.provider.verify_session(access_token=denied))
-        response = httpx.Response(200, json={"id_token": denied})
+        response = httpx.Response(200, json={"id_token": denied, "token_type": "Bearer"})
+        with patch.object(self.provider._transport, "request", return_value=response):
+            with self.assertRaises(InvalidCodeError):
+                self.provider.refresh_session(refresh_token="refresh")
+
+    def test_email_only_members_can_log_in_refresh_and_make_requests(self) -> None:
+        self.provider._access_policy = AccessPolicy.from_config(
+            {"emails": [{"connector_id": "github", "email": "member@example.test"}]}
+        )
+        token = self._token(email="member@example.test")
+        self.assertNotIn("groups", self.provider._scopes.split())
+        self.assertIsNotNone(self.provider.verify_session(access_token=token))
+        response = httpx.Response(200, json={"id_token": token, "refresh_token": "refresh", "token_type": "Bearer"})
+        with patch.object(self.provider._transport, "request", return_value=response):
+            session = self.provider.complete_login(
+                code="code", state="state", code_verifier="verifier", redirect_uri="http://localhost:9119/auth/callback"
+            )
+            self.assertEqual(session.email, "member@example.test")
+            self.assertEqual(session.access_token, token)
+            self.assertEqual(session.refresh_token, "refresh")
+            self.assertEqual(self.provider.refresh_session(refresh_token="refresh").email, "member@example.test")
+
+    def test_email_rules_reject_invalid_claims_at_login_refresh_and_request(self) -> None:
+        self.provider._access_policy = AccessPolicy.from_config(
+            {"emails": [{"connector_id": "github", "email": "user@example.test"}]}
+        )
+        invalid_tokens = (
+            ("different email", self._token(email="other@example.test")),
+            ("null email", self._token(email=None)),
+            ("empty email", self._token(email="")),
+            ("non-string email", self._token(email=["user@example.test"])),
+            ("unverified email", self._token(email_verified=False)),
+            ("string verified flag", self._token(email_verified="true")),
+            ("numeric verified flag", self._token(email_verified=1)),
+            ("different connector", self._token(federated_claims={"connector_id": "other", "user_id": OWNER})),
+            ("missing user ID", self._token(federated_claims={"connector_id": "github"})),
+        )
+        for label, token in invalid_tokens:
+            with self.subTest(invalid=label):
+                self.assertIsNone(self.provider.verify_session(access_token=token))
+                response = httpx.Response(200, json={"id_token": token, "token_type": "Bearer"})
+                with patch.object(self.provider._transport, "request", return_value=response):
+                    with self.assertRaises(InvalidCodeError):
+                        self.provider.complete_login(
+                            code="code",
+                            state="state",
+                            code_verifier="verifier",
+                            redirect_uri="http://localhost:9119/auth/callback",
+                        )
+                    with self.assertRaises(InvalidCodeError):
+                        self.provider.refresh_session(refresh_token="refresh")
+
+    def test_matching_email_does_not_bypass_signature_verification(self) -> None:
+        self.provider._access_policy = AccessPolicy.from_config(
+            {"emails": [{"connector_id": "github", "email": "user@example.test"}]}
+        )
+        other_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        token = self._token(signing_key=other_key)
+        self.assertIsNone(self.provider.verify_session(access_token=token))
+        response = httpx.Response(200, json={"id_token": token, "token_type": "Bearer"})
+        with patch.object(self.provider._transport, "request", return_value=response):
+            with self.assertRaises(InvalidCodeError):
+                self.provider.complete_login(
+                    code="code",
+                    state="state",
+                    code_verifier="verifier",
+                    redirect_uri="http://localhost:9119/auth/callback",
+                )
+            with self.assertRaises(InvalidCodeError):
+                self.provider.refresh_session(refresh_token="refresh")
+
+    def test_removing_email_permission_rejects_existing_session_and_refresh(self) -> None:
+        self.provider._access_policy = AccessPolicy.from_config(
+            {"emails": [{"connector_id": "github", "email": "user@example.test"}]}
+        )
+        token = self._token()
+        self.assertIsNotNone(self.provider.verify_session(access_token=token))
+        self.provider._access_policy = AccessPolicy.from_config(
+            {"emails": [{"connector_id": "github", "email": "other@example.test"}]}
+        )
+        self.assertIsNone(self.provider.verify_session(access_token=token))
+        response = httpx.Response(200, json={"id_token": token, "token_type": "Bearer"})
         with patch.object(self.provider._transport, "request", return_value=response):
             with self.assertRaises(InvalidCodeError):
                 self.provider.refresh_session(refresh_token="refresh")
@@ -182,7 +265,7 @@ class GitHubIdentityTests(unittest.TestCase):
 
     def test_login_and_refresh_reject_another_users_valid_token(self) -> None:
         token = self._token(identity={"connector_id": "github", "user_id": "999"})
-        response = httpx.Response(200, json={"id_token": token, "refresh_token": "refresh"})
+        response = httpx.Response(200, json={"id_token": token, "refresh_token": "refresh", "token_type": "Bearer"})
         with patch.object(self.provider._transport, "request", return_value=response):
             with self.assertRaises(InvalidCodeError):
                 self.provider.complete_login(
@@ -193,6 +276,48 @@ class GitHubIdentityTests(unittest.TestCase):
                 )
             with self.assertRaises(InvalidCodeError):
                 self.provider.refresh_session(refresh_token="refresh")
+
+    def test_login_and_refresh_require_bearer_token_type(self) -> None:
+        token = self._token()
+        invalid_types: tuple[dict[str, object], ...] = (
+            {},
+            {"token_type": ""},
+            {"token_type": None},
+            {"token_type": "Basic"},
+            {"token_type": "Bearer "},
+            {"token_type": 1},
+            {"token_type": True},
+            {"token_type": []},
+            {"token_type": {}},
+        )
+        for extra in invalid_types:
+            with self.subTest(extra=extra):
+                response = httpx.Response(200, json={"id_token": token, **extra})
+                with patch.object(self.provider._transport, "request", return_value=response):
+                    with self.assertRaisesRegex(ProviderError, "unexpected token_type"):
+                        self.provider.complete_login(
+                            code="code",
+                            state="state",
+                            code_verifier="verifier",
+                            redirect_uri="http://localhost:9119/auth/callback",
+                        )
+                    with self.assertRaisesRegex(ProviderError, "unexpected token_type"):
+                        self.provider.refresh_session(refresh_token="refresh")
+
+    def test_bearer_token_type_is_case_insensitive(self) -> None:
+        token = self._token()
+        for token_type in ("bearer", "Bearer", "BEARER"):
+            with self.subTest(token_type=token_type):
+                response = httpx.Response(200, json={"id_token": token, "token_type": token_type})
+                with patch.object(self.provider._transport, "request", return_value=response):
+                    session = self.provider.complete_login(
+                        code="code",
+                        state="state",
+                        code_verifier="verifier",
+                        redirect_uri="http://localhost:9119/auth/callback",
+                    )
+                    self.assertEqual(session.access_token, token)
+                    self.assertEqual(self.provider.refresh_session(refresh_token="refresh").access_token, token)
 
     def test_rejected_grants_keep_login_and_refresh_error_semantics(self) -> None:
         response = httpx.Response(400, json={"error": "invalid_grant"})
@@ -351,6 +476,8 @@ class TLSTests(unittest.TestCase):
                         "iss": fixture.issuer,
                         "aud": CLIENT,
                         "sub": "dex-owner",
+                        "email": "user@example.test",
+                        "email_verified": True,
                         "iat": now,
                         "exp": now + 300,
                         "federated_claims": {"connector_id": "github", "user_id": OWNER},

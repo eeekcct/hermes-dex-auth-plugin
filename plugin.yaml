@@ -1,5 +1,5 @@
 name: dex-auth
 version: 0.1.0
-description: Hermes Dashboard login through Dex with connector-scoped user and group allowlists.
+description: Hermes Dashboard login through Dex with connector-scoped user, email, and group allowlists.
 author: eeekcct
 kind: backend

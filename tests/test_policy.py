@@ -13,21 +13,28 @@ class PolicyTests(unittest.TestCase):
                     {"connector_id": "github", "user_id": "123"},
                     {"connector_id": "oidc", "user_id": "employee-id"},
                 ],
+                "emails": [{"connector_id": "github", "email": "member@example.test"}],
                 "groups": [{"connector_id": "github", "name": "my-org:platform"}],
             }
         )
 
-    def _claims(self, connector: object = "github", user: object = "123", groups: object = None) -> dict[str, object]:
+    def _claims(
+        self, connector: object = "github", user: object = "123", groups: object = None, **overrides: object
+    ) -> dict[str, object]:
         return {
             "federated_claims": {"connector_id": connector, "user_id": user},
+            "email": "user@example.test",
+            "email_verified": True,
             "groups": [] if groups is None else groups,
+            **overrides,
         }
 
     def test_multiple_users_and_non_numeric_ids(self) -> None:
         self.assertTrue(self.policy.allows(self._claims()))
         self.assertTrue(self.policy.allows(self._claims("oidc", "employee-id")))
 
-    def test_users_or_groups_allow_access(self) -> None:
+    def test_users_emails_or_groups_allow_access(self) -> None:
+        self.assertTrue(self.policy.allows(self._claims(user="other", email="member@example.test")))
         self.assertTrue(self.policy.allows(self._claims(user="other", groups=["my-org:platform"])))
         self.assertFalse(self.policy.allows(self._claims(user="other", groups=["my-org:other"])))
 
@@ -54,8 +61,64 @@ class PolicyTests(unittest.TestCase):
             with self.subTest(claims=claims):
                 self.assertFalse(self.policy.allows(claims))
 
+    def test_email_only_policy_allows_verified_email(self) -> None:
+        policy = AccessPolicy.from_config({"emails": [{"connector_id": "github", "email": "member@example.test"}]})
+        self.assertTrue(policy.allows(self._claims(user="other", email="member@example.test")))
+        self.assertFalse(policy.allows(self._claims(user="other", email="other@example.test")))
+
+    def test_email_matching_is_exact(self) -> None:
+        for email in (
+            "MEMBER@example.test",
+            "member@EXAMPLE.test",
+            "member@example.test.evil",
+            " member@example.test",
+            "member@example.test ",
+            "*@example.test",
+        ):
+            with self.subTest(email=email):
+                self.assertFalse(self.policy.allows(self._claims(user="other", email=email)))
+        wildcard_policy = AccessPolicy.from_config({"emails": [{"connector_id": "github", "email": "*@example.test"}]})
+        self.assertFalse(wildcard_policy.allows(self._claims(user="other", email="member@example.test")))
+
+    def test_same_email_in_another_connector_is_denied(self) -> None:
+        self.assertTrue(self.policy.allows(self._claims(user="other", email="member@example.test")))
+        self.assertFalse(self.policy.allows(self._claims("oidc", "other", email="member@example.test")))
+
+    def test_required_identity_and_verified_email_apply_to_every_rule(self) -> None:
+        policies = {
+            "users": AccessPolicy(users=self.policy.users),
+            "emails": AccessPolicy(emails=self.policy.emails),
+            "groups": AccessPolicy(groups=self.policy.groups),
+        }
+        base = self._claims(email="member@example.test", groups=["my-org:platform"])
+        cases: list[tuple[str, dict[str, object]]] = []
+        invalid_strings: tuple[object, ...] = (None, "", 123, True, [], {})
+        for field in ("connector_id", "user_id"):
+            identity: dict[str, object] = {"connector_id": "github", "user_id": "123"}
+            del identity[field]
+            cases.append((f"missing {field}", {**base, "federated_claims": identity}))
+            for value in invalid_strings:
+                identity = {"connector_id": "github", "user_id": "123", field: value}
+                cases.append((f"{field}={value!r}", {**base, "federated_claims": identity}))
+        invalid_values: dict[str, tuple[object, ...]] = {
+            "email": invalid_strings,
+            "email_verified": (None, False, 1, "true", "True", [], {}),
+        }
+        for field, values in invalid_values.items():
+            claims = base.copy()
+            del claims[field]
+            cases.append((f"missing {field}", claims))
+            for value in values:
+                cases.append((f"{field}={value!r}", {**base, field: value}))
+        for name, policy in policies.items():
+            with self.subTest(rule=name):
+                self.assertTrue(policy.allows(base))
+            for label, claims in cases:
+                with self.subTest(rule=name, invalid=label):
+                    self.assertFalse(policy.allows(claims))
+
     def test_empty_policy_is_rejected(self) -> None:
-        empty_policies: tuple[object, ...] = ({}, {"users": [], "groups": []})
+        empty_policies: tuple[object, ...] = ({}, {"users": [], "emails": [], "groups": []})
         for value in empty_policies:
             with self.subTest(value=value), self.assertRaises(ValueError):
                 AccessPolicy.from_config(value)
@@ -69,6 +132,12 @@ class PolicyTests(unittest.TestCase):
             {"users": [{"connector_id": "github", "user_id": 123}]},
             {"users": [{"connector_id": "", "user_id": "123"}]},
             {"users": [{"user_id": "123"}]},
+            {"emails": None},
+            {"emails": "member@example.test"},
+            {"emails": [{"connector_id": "github", "email": ""}]},
+            {"emails": [{"connector_id": "github", "email": 123}]},
+            {"emails": [{"email": "member@example.test"}]},
+            {"emails": [{"connector_id": "github", "email": "member@example.test", "pattern": "*"}]},
             {"groups": [{"connector_id": "github", "name": ""}]},
             {"groups": [{"connector_id": "github", "name": "team", "role": "admin"}]},
         )

@@ -103,7 +103,8 @@ class DexAuthProvider(SelfHostedOIDCProvider):
         token = payload.get("id_token")
         if not isinstance(token, str) or not token:
             raise ProviderError("OIDC token response missing id_token")
-        if str(payload.get("token_type", "")).lower() not in ("", "bearer"):
+        token_type = payload.get("token_type")
+        if not isinstance(token_type, str) or token_type.lower() != "bearer":
             raise ProviderError("OIDC token response has an unexpected token_type")
         claims = self._verify_id_token(token)
         return self._session(token, refresh_token_from(payload, previous_refresh_token), claims)
