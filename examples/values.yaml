@@ -1,0 +1,26 @@
+# Merge this config block into your deployment's existing Helm values.
+config:
+  dashboard:
+    oauth:
+      dex:
+        issuer: https://dex.example.com
+        client_id: hermes-dashboard
+        display_name: Dex
+        tls:
+          insecure_skip_verify: false
+          # ca_bundle: /etc/dex/ca.crt
+        access:
+          # Any matching user, email, or group rule allows login.
+          # Every login requires connector/user IDs and a verified, non-empty email.
+          users:
+            - connector_id: github
+              user_id: "YOUR_USER_ID"
+          emails:
+            - connector_id: github
+              email: "user@example.com"  # Exact match; wildcards are not supported.
+          groups: []
+          # Omit unused rule lists; at least one rule is required.
+          # Alternatively, or in addition to users and emails:
+          # groups:
+          #   - connector_id: github
+          #     name: "my-org:platform"
