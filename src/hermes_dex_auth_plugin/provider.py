@@ -106,7 +106,11 @@ class DexAuthProvider(SelfHostedOIDCProvider):
         token_type = payload.get("token_type")
         if not isinstance(token_type, str) or token_type.lower() != "bearer":
             raise ProviderError("OIDC token response has an unexpected token_type")
-        claims = self._verify_id_token(token)
+        try:
+            claims = self._verify_id_token(token)
+        except InvalidCodeError as exc:
+            # Hermes handles a rejected refresh as an expired session, not a login-code error.
+            raise bad_request_exc(str(exc)) from exc
         return self._session(token, refresh_token_from(payload, previous_refresh_token), claims)
 
     def _get_jwks_client(self) -> PyJWKClient:

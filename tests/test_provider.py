@@ -150,7 +150,7 @@ class GitHubIdentityTests(unittest.TestCase):
         self.assertIsNone(self.provider.verify_session(access_token=denied))
         response = httpx.Response(200, json={"id_token": denied, "token_type": "Bearer"})
         with patch.object(self.provider._transport, "request", return_value=response):
-            with self.assertRaises(InvalidCodeError):
+            with self.assertRaises(RefreshExpiredError):
                 self.provider.refresh_session(refresh_token="refresh")
 
     def test_email_only_members_can_log_in_refresh_and_make_requests(self) -> None:
@@ -197,7 +197,7 @@ class GitHubIdentityTests(unittest.TestCase):
                             code_verifier="verifier",
                             redirect_uri="http://localhost:9119/auth/callback",
                         )
-                    with self.assertRaises(InvalidCodeError):
+                    with self.assertRaises(RefreshExpiredError):
                         self.provider.refresh_session(refresh_token="refresh")
 
     def test_matching_email_does_not_bypass_signature_verification(self) -> None:
@@ -216,7 +216,7 @@ class GitHubIdentityTests(unittest.TestCase):
                     code_verifier="verifier",
                     redirect_uri="http://localhost:9119/auth/callback",
                 )
-            with self.assertRaises(InvalidCodeError):
+            with self.assertRaises(RefreshExpiredError):
                 self.provider.refresh_session(refresh_token="refresh")
 
     def test_removing_email_permission_rejects_existing_session_and_refresh(self) -> None:
@@ -231,7 +231,7 @@ class GitHubIdentityTests(unittest.TestCase):
         self.assertIsNone(self.provider.verify_session(access_token=token))
         response = httpx.Response(200, json={"id_token": token, "token_type": "Bearer"})
         with patch.object(self.provider._transport, "request", return_value=response):
-            with self.assertRaises(InvalidCodeError):
+            with self.assertRaises(RefreshExpiredError):
                 self.provider.refresh_session(refresh_token="refresh")
 
     def test_group_scope_is_requested_only_when_group_rules_are_configured(self) -> None:
@@ -274,7 +274,7 @@ class GitHubIdentityTests(unittest.TestCase):
                     code_verifier="verifier",
                     redirect_uri="http://192.168.0.152:9119/auth/callback",
                 )
-            with self.assertRaises(InvalidCodeError):
+            with self.assertRaises(RefreshExpiredError):
                 self.provider.refresh_session(refresh_token="refresh")
 
     def test_login_and_refresh_require_bearer_token_type(self) -> None:
@@ -318,6 +318,47 @@ class GitHubIdentityTests(unittest.TestCase):
                     )
                     self.assertEqual(session.access_token, token)
                     self.assertEqual(self.provider.refresh_session(refresh_token="refresh").access_token, token)
+
+    def test_invalid_token_times_keep_login_and_refresh_error_semantics(self) -> None:
+        future = int(time.time()) + 3600
+        tokens = (
+            ("expired", self._token(exp=1)),
+            ("future issuance", self._token(iat=future)),
+            ("not yet valid", self._token(nbf=future)),
+        )
+        for label, token in tokens:
+            with self.subTest(token=label):
+                self.assertIsNone(self.provider.verify_session(access_token=token))
+                response = httpx.Response(200, json={"id_token": token, "token_type": "Bearer"})
+                with patch.object(self.provider._transport, "request", return_value=response):
+                    with self.assertRaises(InvalidCodeError):
+                        self.provider.complete_login(
+                            code="code",
+                            state="state",
+                            code_verifier="verifier",
+                            redirect_uri="http://localhost:9119/auth/callback",
+                        )
+                    with self.assertRaises(RefreshExpiredError):
+                        self.provider.refresh_session(refresh_token="refresh")
+
+    def test_provider_outages_remain_provider_errors_during_grants(self) -> None:
+        response = httpx.Response(200, json={"id_token": self._token(), "token_type": "Bearer"})
+        outage = ProviderError("JWKS unavailable")
+        with (
+            patch.object(self.provider._transport, "request", return_value=response),
+            patch.object(self.provider, "_verify_id_token", side_effect=outage),
+        ):
+            with self.assertRaises(ProviderError) as login_error:
+                self.provider.complete_login(
+                    code="code",
+                    state="state",
+                    code_verifier="verifier",
+                    redirect_uri="http://localhost:9119/auth/callback",
+                )
+            self.assertIs(login_error.exception, outage)
+            with self.assertRaises(ProviderError) as refresh_error:
+                self.provider.refresh_session(refresh_token="refresh")
+            self.assertIs(refresh_error.exception, outage)
 
     def test_rejected_grants_keep_login_and_refresh_error_semantics(self) -> None:
         response = httpx.Response(400, json={"error": "invalid_grant"})
