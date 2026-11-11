@@ -5,7 +5,7 @@
 An authentication plugin for signing in to Hermes Dashboard through Dex.
 It connects to a Dex issuer and restricts login with allowlists of user IDs,
 email addresses, and groups.
-The target runtime is Hermes **v0.23.0** / Python **3.14.9**.
+The target runtime is Hermes **v0.23.1** / Python **3.14.9**.
 The Hermes plugin name is `dex-auth`; the authentication provider ID is `dex`.
 Configuration lives under `dashboard.oauth.dex`.
 
@@ -146,7 +146,7 @@ Hermes discovers the directory and calls `register(ctx)` in `__init__.py`
 to register the Dex provider.
 
 Runtime dependencies are listed in `pyproject.toml` and are also included in
-Hermes v0.23.0. Do not copy `tests` or the development `.venv` into the runtime image.
+Hermes v0.23.1. Do not copy `tests` or the development `.venv` into the runtime image.
 
 When migrating from the previous plugin, the provider name changes from
 `argocd-github` to `dex`. Replace `HERMES_ARGOCD_*` environment variables with
@@ -215,7 +215,7 @@ Run these commands in PowerShell from the repository root:
 
 ```powershell
 # Fetch the source if ../hermes-agent does not exist yet.
-git clone --depth 1 --branch v0.23.0 https://github.com/NousResearch/hermes-agent.git ../hermes-agent
+git clone --depth 1 --branch v0.23.1 https://github.com/NousResearch/hermes-agent.git ../hermes-agent
 uv sync --locked
 $env:PYTHONPATH = (Resolve-Path ../hermes-agent).Path
 uv run --locked python -m unittest discover -s tests -v

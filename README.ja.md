@@ -4,7 +4,7 @@
 
 Dex を使って Hermes Dashboard にログインするための認証プラグインです。
 任意の Dex issuer に接続し、ユーザー ID・メールアドレス・グループの許可リストでログインを制限します。
-動作確認対象は Hermes **v0.23.0** / Python **3.14.9** です。
+動作確認対象は Hermes **v0.23.1** / Python **3.14.9** です。
 Hermes に登録するプラグイン名は `dex-auth`、認証 provider の識別子は `dex` です。
 設定パスは `dashboard.oauth.dex` を使います。
 
@@ -130,7 +130,7 @@ COPY plugin.yaml /opt/hermes/plugins/dashboard_auth/dex-auth/plugin.yaml
 配置先には `__init__.py` と `plugin.yaml` が並びます。Hermes は起動時にこのディレクトリを検出し、
 `__init__.py` の `register(ctx)` を呼んで Dex provider を登録します。
 
-ライブラリは `pyproject.toml` に記載しています。Hermes v0.23.0 の環境にも含まれます。
+ライブラリは `pyproject.toml` に記載しています。Hermes v0.23.1 の環境にも含まれます。
 `tests`・開発用 `.venv` は実行イメージにコピーしません。
 
 旧プラグインから移行する場合は、provider 名は `argocd-github` から `dex` に変わり、
@@ -188,7 +188,7 @@ PowerShell で、このリポジトリのルートから実行します。
 
 ```powershell
 # ../hermes-agent がまだない場合に取得します。
-git clone --depth 1 --branch v0.23.0 https://github.com/NousResearch/hermes-agent.git ../hermes-agent
+git clone --depth 1 --branch v0.23.1 https://github.com/NousResearch/hermes-agent.git ../hermes-agent
 uv sync --locked
 $env:PYTHONPATH = (Resolve-Path ../hermes-agent).Path
 uv run --locked python -m unittest discover -s tests -v

@@ -1,4 +1,4 @@
-"""Run with the Python environment from nousresearch/hermes-agent:v0.23.0."""
+"""Run with the Python environment from nousresearch/hermes-agent:v0.23.1."""
 
 import json
 import os
