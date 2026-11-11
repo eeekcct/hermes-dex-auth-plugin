@@ -58,6 +58,36 @@ class ConfigTests(unittest.TestCase):
             register(_registration_context(providers))
             self.assertEqual(providers, [])
 
+    def test_auxiliary_environment_variables_do_not_enable_plugin(self) -> None:
+        self.assertIsNone(
+            config.load_settings(
+                {},
+                environ={
+                    "HERMES_DEX_CLIENT_SECRET": "secret",
+                    "HERMES_DEX_CA_BUNDLE": "/env-ca.crt",
+                    "HERMES_DEX_INSECURE_SKIP_VERIFY": "true",
+                },
+            )
+        )
+
+    def test_tls_environment_overrides_config_and_blank_values_do_not(self) -> None:
+        settings = self._load(
+            {**SETTINGS, "tls": {"ca_bundle": "/config-ca.crt", "insecure_skip_verify": True}},
+            env={
+                "HERMES_DEX_CA_BUNDLE": " /env-ca.crt ",
+                "HERMES_DEX_INSECURE_SKIP_VERIFY": " FALSE ",
+            },
+        )
+        self.assertEqual(settings["ca_bundle"], "/env-ca.crt")
+        self.assertFalse(settings["insecure_skip_verify"])
+
+        settings = self._load(
+            {**SETTINGS, "tls": {"ca_bundle": "/config-ca.crt"}},
+            env={"HERMES_DEX_CA_BUNDLE": " ", "HERMES_DEX_INSECURE_SKIP_VERIFY": " "},
+        )
+        self.assertEqual(settings["ca_bundle"], "/config-ca.crt")
+        self.assertFalse(settings["insecure_skip_verify"])
+
     def test_registration_reads_hermes_configuration(self) -> None:
         providers: list[DexAuthProvider] = []
         with (

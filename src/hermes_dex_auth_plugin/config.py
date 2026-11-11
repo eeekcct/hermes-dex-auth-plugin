@@ -9,6 +9,9 @@ from .policy import AccessPolicy, mapping, text
 _ENV = {
     "issuer": "HERMES_DEX_ISSUER",
     "client_id": "HERMES_DEX_CLIENT_ID",
+    "client_secret": "HERMES_DEX_CLIENT_SECRET",
+    "ca_bundle": "HERMES_DEX_CA_BUNDLE",
+    "insecure_skip_verify": "HERMES_DEX_INSECURE_SKIP_VERIFY",
 }
 
 
@@ -54,35 +57,35 @@ def load_settings(config: object = None, *, environ: Mapping[str, str] | None = 
     if config is None:
         config = _read_hermes_config()
     env = os.environ if environ is None else environ
+
+    def setting(key: str) -> str:
+        return env.get(_ENV[key], "")
+
     section = _section(config)
-    if section is None and not any(env.get(name) for name in _ENV.values()):
+    if section is None and not any(setting(key) for key in ("issuer", "client_id")):
         return None
     if section is None:
         section = dict[str, object]()
 
-    def setting(key: str) -> str:
-        value = env.get(_ENV[key], "").strip() or section.get(key)
-        return text(value, field=key)
-
     tls = mapping(section.get("tls", {}), field="tls", keys=("insecure_skip_verify", "ca_bundle"))
     skip_verify = tls.get("insecure_skip_verify", False)
-    override = env.get("HERMES_DEX_INSECURE_SKIP_VERIFY", "").strip().lower()
+    override = setting("insecure_skip_verify").strip().lower()
     if override:
         if override not in ("true", "false"):
-            raise ValueError("HERMES_DEX_INSECURE_SKIP_VERIFY must be true or false")
+            raise ValueError(f"{_ENV['insecure_skip_verify']} must be true or false")
         skip_verify = override == "true"
     if not isinstance(skip_verify, bool):
         raise ValueError("tls.insecure_skip_verify must be a boolean")
-    ca_bundle = env.get("HERMES_DEX_CA_BUNDLE", "").strip() or tls.get("ca_bundle", "")
+    ca_bundle = setting("ca_bundle").strip() or tls.get("ca_bundle", "")
     if not isinstance(ca_bundle, str):
         raise ValueError("tls.ca_bundle must be a string")
     if ca_bundle and skip_verify:
         raise ValueError("tls.ca_bundle and insecure_skip_verify cannot be used together")
 
     return {
-        "issuer": setting("issuer"),
-        "client_id": setting("client_id"),
-        "client_secret": env.get("HERMES_DEX_CLIENT_SECRET", "").strip(),
+        "issuer": text(setting("issuer").strip() or section.get("issuer"), field="issuer"),
+        "client_id": text(setting("client_id").strip() or section.get("client_id"), field="client_id"),
+        "client_secret": setting("client_secret").strip(),
         "display_name": text(section.get("display_name", "Dex"), field="display_name"),
         "insecure_skip_verify": skip_verify,
         "ca_bundle": ca_bundle,
