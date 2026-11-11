@@ -64,6 +64,7 @@ class GitHubIdentityTests(unittest.TestCase):
         *,
         identity: dict[str, str] | None = None,
         signing_key: rsa.RSAPrivateKey | None = None,
+        key_id: str = "test-key",
         **overrides: object,
     ) -> str:
         now = int(time.time())
@@ -78,7 +79,38 @@ class GitHubIdentityTests(unittest.TestCase):
             "federated_claims": identity or {"connector_id": "github", "user_id": OWNER},
         }
         claims.update(overrides)
-        return jwt.encode(claims, signing_key or self.key, algorithm="RS256")
+        return jwt.encode(claims, signing_key or self.key, algorithm="RS256", headers={"kid": key_id})
+
+    def test_removed_signing_key_is_rejected_after_jwks_cache_expiry(self) -> None:
+        replacement_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        old_jwk: dict[str, object] = json.loads(RSAAlgorithm.to_jwk(self.key.public_key()))
+        old_jwk["kid"] = "test-key"
+        new_jwk: dict[str, object] = json.loads(RSAAlgorithm.to_jwk(replacement_key.public_key()))
+        new_jwk["kid"] = "replacement-key"
+        old_token = self._token()
+        new_token = self._token(signing_key=replacement_key, key_id="replacement-key")
+        client = self.provider._transport.jwks_client(ISSUER + "/keys")
+
+        # Advance only the JWKS clock so token expiry and discovery refresh cannot mask stale keys.
+        started = time.monotonic()
+        with (
+            patch.object(self.provider, "_jwks_client", client),
+            patch.object(
+                self.provider._transport, "request", return_value=httpx.Response(200, json={"keys": [old_jwk]})
+            ) as request,
+            patch("jwt.jwk_set_cache.time.monotonic", return_value=started) as clock,
+        ):
+            self.assertIsNotNone(self.provider.verify_session(access_token=old_token))
+            request.return_value = httpx.Response(200, json={"keys": [new_jwk]})
+            clock.return_value = started + 299
+            self.assertIsNotNone(self.provider.verify_session(access_token=old_token))
+            self.assertEqual(request.call_count, 1)
+
+            clock.return_value = started + 301
+            self.assertIsNotNone(self.provider.verify_session(access_token=new_token))
+            self.assertEqual(request.call_count, 2)
+            with self.assertRaises((InvalidCodeError, ProviderError)):
+                self.provider._verify_id_token(old_token)
 
     def test_owner_receives_github_session(self) -> None:
         session = self.provider.verify_session(access_token=self._token())

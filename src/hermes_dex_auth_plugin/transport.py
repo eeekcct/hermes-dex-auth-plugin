@@ -67,4 +67,5 @@ class DexTransport:
                     self.jwk_set_cache.put(data)
                 return data
 
-        return DexJWKClient(uri, cache_keys=True, lifespan=300)
+        # Per-key caching has no TTL and would keep trusting keys removed from Dex.
+        return DexJWKClient(uri, cache_keys=False, lifespan=300)
